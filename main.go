@@ -1,17 +1,19 @@
 package main
 
 import (
-	"fmt"
-	"net/http"
-	"log"
-	"github.com/google/generative-ai-go/genai"
-	"google.golang.org/api/option"
-	_ "github.com/serpapi/google-search-results-golang"
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
 	"os"
 	"strings"
-	"errors"
 	"time"
+
+	"github.com/google/generative-ai-go/genai"
+	_ "github.com/serpapi/google-search-results-golang"
+	"google.golang.org/api/option"
 )
 
 var model *genai.GenerativeModel
@@ -24,42 +26,70 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Hello")
 }
 
-func newsHandler(w http.ResponseWriter, r *http.Request) {
-	topic := r.URL.Query().Get("topic")
-	prompt := fmt.Sprintf("User: Provide the google search terms for getting information about %s as of %s. Your response is an array of the terms in the format [\"term\"] of lenght 5. You Don't have to perform the search, just give what needs to be searched.\nResponse: ", topic, time.Now().Format("2 January 2006"))
-	fmt.Println(prompt)
-	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
-	if err != nil {
-		panic(err)
-	}
-	respSplit, err := respToArr(fmt.Sprint(resp.Candidates[0].Content.Parts[0]))
-	if err != nil {
-		panic(err)
-	}
-	fmt.Fprintf(w, fmt.Sprint(respSplit))
+type Source struct {
+	Id   string `json:"id"`
+	Name string `json:"name"`
 }
 
-func getResults(q string) []string {
-	reqUrl := fmt.Sprintf("https://newsapi.org/v2/everything")
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://newsapi.org/", nil)	
+type Article struct {
+	Source      Source    `json:"source"`
+	Author      string    `json:"author"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	Url         string    `json:"url"`
+	UrlToImage  string    `json:"urlToImage"`
+	PublishedAt time.Time `json:"publishedAt"`
+	Content     string    `json:"content"`
+}
+
+type NewsResponse struct {
+	Status       string    `json:"status"`
+	TotalResults int       `json:"totalResults"`
+	Articles     []Article `json:"articles"`
+}
+
+func newsHandler(w http.ResponseWriter, r *http.Request) {
+	topic := r.URL.Query().Get("topic")
+	resp, err := getResults(topic)
 	if err != nil {
 		panic(err)
 	}
+	fmt.Fprintf(w, fmt.Sprintf("%#v\n", *resp))
+}
+
+func getResults(q string) (*NewsResponse, error) {
 	from := time.Now().Add(-time.Hour * 24 * 7)
 	fmt.Println(from.String())
-	req.URL.Query().Add("apiKey", searchApiKey)
-	req.URL.Query().Add("q", q)
-	req.URL.Query().Add("from", from.Format(time.RFC3339))
+	reqUrl := fmt.Sprintf("https://newsapi.org/v2/everything?apiKey=%s&q=%s&from=%s&pageSize=%s", searchApiKey, q, from.Format("2006-01-02T15:04:05-0700"), "10")
+
+	fmt.Println(reqUrl)
+	req, err := http.NewRequestWithContext(ctx, "GET", reqUrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	decoder := json.NewDecoder(resp.Body)
+	newsResp := &NewsResponse{}
+	err = decoder.Decode(newsResp)
+	if err != nil {
+		return nil, err
+	}
+	return newsResp, nil
+
 }
 
 func respToArr(resp string) ([]string, error) {
 	fmt.Println(resp)
-	resp, ok := strings.CutPrefix(resp, "[");	
+	resp, ok := strings.CutPrefix(resp, "[")
 	if !ok {
 		return nil, errors.New("Invalid array")
 	}
 	fmt.Println(resp)
-	resp, ok = strings.CutSuffix(resp, "]");	
+	resp, ok = strings.CutSuffix(resp, "]")
 	if !ok {
 		return nil, errors.New("Invalid array")
 	}
@@ -79,8 +109,8 @@ func main() {
 	}
 	defer client.Close()
 	searchApiKey = os.Getenv("SEARCH_API_KEY")
-	http.HandleFunc("/", rootHandler);
-	http.HandleFunc("/news", newsHandler);
+	http.HandleFunc("/", rootHandler)
+	http.HandleFunc("/news", newsHandler)
 	model = client.GenerativeModel("gemini-pro")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
