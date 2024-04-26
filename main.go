@@ -54,7 +54,35 @@ func newsHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Fprintf(w, fmt.Sprintf("%#v\n", *resp))
+	summary, err := getSummary(topic, resp)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Fprintf(w, fmt.Sprintf("%#v\n", summary))
+}
+
+func getSummary(topic string, newsArr *NewsResponse) (string, error) {
+	prompt := fmt.Sprintf("You are an conversational AI model designed to create summaries of news given to you on a specific topic. Do NOT use any markdown formatting. Current news about %s\n", topic)
+	for i, news := range newsArr.Articles {
+		prompt += fmt.Sprintf("Article %d:\nTitle: %s\n-by %s\nDescription: %s\nShortened Content: %s\n",
+			i+1,
+			news.Title,
+			news.Author,
+			news.Description,
+			news.Content)
+	}
+	prompt += "User: Summarize the given news\nResponse: "
+	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
+	if err != nil {
+		return "", err
+	}
+	for _, candidate := range resp.Candidates {
+		for _, parts := range candidate.Content.Parts {
+			fmt.Println(parts)
+		}
+	}
+	return fmt.Sprint(resp.Candidates[0].Content.Parts[0]), nil
+
 }
 
 func getResults(q string) (*NewsResponse, error) {
